@@ -53,6 +53,9 @@ impl IPage for DaemonPage {
     async fn goto(&self, url: &str, _options: Option<GotoOptions>) -> Result<(), CliError> {
         let cmd = self.cmd("navigate").await.with_url(url);
         self.send(cmd).await?;
+        // The Chrome extension's handleNavigate already waits for the page to
+        // fully load (URL change + status=complete, up to 15s). No additional
+        // DOM stability check is needed here.
         Ok(())
     }
 

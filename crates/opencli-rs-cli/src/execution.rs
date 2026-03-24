@@ -59,24 +59,24 @@ async fn execute_command_inner(
         let mut bridge = BrowserBridge::new(daemon_port());
         let page = bridge.connect().await?;
 
-        // Pre-navigate to domain if set
-        let pre_navigated_domain = if let Some(domain) = &cmd.domain {
-            let url = format!("https://{}", domain);
-            tracing::debug!(url = %url, "Pre-navigating to domain");
-            page.goto(&url, None).await?;
-            Some(domain.clone())
-        } else {
-            None
-        };
+        // Pre-navigate to domain if set, but ONLY if the pipeline doesn't
+        // start with its own navigate step (to avoid double navigation).
+        let pipeline_starts_with_navigate = cmd.pipeline.as_ref()
+            .and_then(|steps| steps.first())
+            .and_then(|step| step.as_object())
+            .map_or(false, |obj| obj.contains_key("navigate"));
 
-        // Optimize: skip first pipeline navigate step if it targets the same domain we pre-navigated to
-        let pipeline = cmd.pipeline.as_ref().map(|steps| {
-            skip_redundant_navigate(steps, pre_navigated_domain.as_deref())
-        });
+        if !pipeline_starts_with_navigate {
+            if let Some(domain) = &cmd.domain {
+                let url = format!("https://{}", domain);
+                tracing::debug!(url = %url, "Pre-navigating to domain");
+                page.goto(&url, None).await?;
+            }
+        }
 
         // Execute
-        let result = if let Some(ref optimized_pipeline) = pipeline {
-            execute_pipeline(Some(page), optimized_pipeline, &kwargs, &registry).await
+        let result = if let Some(ref steps) = cmd.pipeline {
+            execute_pipeline(Some(page), steps, &kwargs, &registry).await
         } else if cmd.func.is_some() {
             run_command(cmd, Some(page), &kwargs, &registry).await
         } else {
@@ -93,55 +93,6 @@ async fn execute_command_inner(
     }
 }
 
-/// If the first pipeline step is `navigate` to a root URL whose domain matches
-/// `pre_navigated`, skip it since we already navigated there.
-/// Only skips when the navigate target is the domain root (e.g. https://example.com
-/// or https://example.com/) — NOT when it navigates to a specific path.
-fn skip_redundant_navigate(steps: &[Value], pre_navigated: Option<&str>) -> Vec<Value> {
-    let pre_domain = match pre_navigated {
-        Some(d) => d,
-        None => return steps.to_vec(),
-    };
-
-    if let Some(first) = steps.first() {
-        if let Some(obj) = first.as_object() {
-            if let Some(url_val) = obj.get("navigate") {
-                if let Some(url) = url_val.as_str() {
-                    // Only skip if URL contains no templates and is a root domain URL
-                    if !url.contains("${{") {
-                        if let Some((domain, path)) = extract_domain_and_path(url) {
-                            let is_root = path.is_empty() || path == "/";
-                            let domain_matches = domain == pre_domain
-                                || domain.ends_with(&format!(".{}", pre_domain));
-                            if is_root && domain_matches {
-                                tracing::debug!(
-                                    url = url,
-                                    "Skipping redundant navigate (already pre-navigated to {})",
-                                    pre_domain
-                                );
-                                return steps[1..].to_vec();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    steps.to_vec()
-}
-
-fn extract_domain_and_path(url: &str) -> Option<(String, String)> {
-    let without_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    let (host_port, path) = match without_scheme.find('/') {
-        Some(i) => (&without_scheme[..i], &without_scheme[i..]),
-        None => (without_scheme, ""),
-    };
-    let domain = host_port.split(':').next()?; // remove port
-    Some((domain.to_string(), path.to_string()))
-}
 
 async fn run_command(
     cmd: &CliCommand,

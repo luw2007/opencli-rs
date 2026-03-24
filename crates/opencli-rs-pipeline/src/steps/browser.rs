@@ -66,8 +66,36 @@ impl StepHandler for NavigateStep {
         args: &HashMap<String, Value>,
     ) -> Result<Value, CliError> {
         let pg = require_page(&page)?;
-        let url = render_str_param(params, data, args)?;
+        let ctx = default_ctx(data, args);
+
+        let (url, settle_ms) = match params {
+            // navigate: "https://example.com"
+            Value::String(s) => {
+                let rendered = render_template_str(s, &ctx)?;
+                let url = rendered.as_str().unwrap_or("").to_string();
+                (url, None)
+            }
+            // navigate: { url: "...", settleMs: 2000 }
+            Value::Object(obj) => {
+                let url_val = obj.get("url")
+                    .ok_or_else(|| CliError::pipeline("navigate object requires 'url' field"))?;
+                let url_str = url_val.as_str()
+                    .ok_or_else(|| CliError::pipeline("navigate 'url' must be a string"))?;
+                let rendered = render_template_str(url_str, &ctx)?;
+                let url = rendered.as_str().unwrap_or("").to_string();
+                let settle = obj.get("settleMs").and_then(|v| v.as_u64());
+                (url, settle)
+            }
+            _ => return Err(CliError::pipeline("navigate expects a string URL or {url, settleMs} object")),
+        };
+
         pg.goto(&url, None).await?;
+
+        // Wait for page to settle if specified
+        if let Some(ms) = settle_ms {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+
         Ok(data.clone())
     }
 }
@@ -184,18 +212,16 @@ impl StepHandler for WaitStep {
         let pg = require_page(&page)?;
 
         match params {
-            // wait: 1000 (ms)
+            // wait: 2 (seconds — matching original opencli convention)
             Value::Number(n) => {
-                let ms = n
-                    .as_u64()
-                    .ok_or_else(|| CliError::pipeline("wait: invalid number"))?;
+                let secs = n.as_f64().unwrap_or(1.0);
+                let ms = (secs * 1000.0) as u64;
                 pg.wait_for_timeout(ms).await?;
             }
             Value::Object(obj) => {
                 if let Some(time_val) = obj.get("time") {
-                    let ms = time_val
-                        .as_u64()
-                        .ok_or_else(|| CliError::pipeline("wait: 'time' must be a number (ms)"))?;
+                    let secs = time_val.as_f64().unwrap_or(1.0);
+                    let ms = (secs * 1000.0) as u64;
                     pg.wait_for_timeout(ms).await?;
                 } else if let Some(sel_val) = obj.get("selector") {
                     let selector = sel_val

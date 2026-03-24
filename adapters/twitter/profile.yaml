@@ -15,23 +15,28 @@ columns: [screen_name, name, bio, location, url, followers, following, tweets, l
 
 pipeline:
   - navigate:
-      url: https://x.com
+      url: https://x.com/home
+      settleMs: 5000
+
+  # Step 1: Detect username (from arg or logged-in user)
+  - evaluate: |
+      (() => {
+        let username = (${{ args.username | json }} || '').replace(/^@/, '');
+        if (username) return username;
+        const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+        if (!link) throw new Error('Could not detect logged-in user. Are you logged in?');
+        return link.getAttribute('href').replace('/', '');
+      })()
+
+  # Step 2: Navigate to user profile page (uses data from previous evaluate)
+  - navigate:
+      url: "https://x.com/${{ data }}"
       settleMs: 3000
 
+  # Step 3: Fetch profile via GraphQL API
   - evaluate: |
       (async () => {
-        let username = (${{ args.username | json }} || '').replace(/^@/, '');
-
-        // If no username, detect the logged-in user
-        if (!username) {
-          const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
-          if (!link) throw new Error('Could not detect logged-in user. Are you logged in?');
-          username = link.getAttribute('href').replace('/', '');
-          // Navigate to the profile page
-          window.location.href = 'https://x.com/' + username;
-          await new Promise(r => setTimeout(r, 3000));
-        }
-
+        const screenName = ${{ data | json }};
         const ct0 = document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('ct0='))?.split('=')[1];
         if (!ct0) throw new Error('No ct0 cookie - not logged into x.com');
 
@@ -44,7 +49,7 @@ pipeline:
         };
 
         const variables = JSON.stringify({
-          screen_name: username,
+          screen_name: screenName,
           withSafetyModeUserFields: true,
         });
         const features = JSON.stringify({
@@ -97,13 +102,13 @@ pipeline:
         const d = await resp.json();
 
         const result = d.data?.user?.result;
-        if (!result) throw new Error('User @' + username + ' not found');
+        if (!result) throw new Error('User @' + screenName + ' not found');
 
         const legacy = result.legacy || {};
         const expandedUrl = legacy.entities?.url?.urls?.[0]?.expanded_url || '';
 
         return [{
-          screen_name: legacy.screen_name || username,
+          screen_name: legacy.screen_name || screenName,
           name: legacy.name || '',
           bio: legacy.description || '',
           location: legacy.location || '',

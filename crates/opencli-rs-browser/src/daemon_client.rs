@@ -47,7 +47,9 @@ impl DaemonClient {
 
             match result {
                 Ok(resp) => {
-                    if resp.status().is_success() {
+                    let status = resp.status();
+
+                    if status.is_success() {
                         let daemon_result: DaemonResult = resp.json().await.map_err(|e| {
                             CliError::browser_connect(format!("Failed to parse daemon response: {e}"))
                         })?;
@@ -61,13 +63,22 @@ impl DaemonClient {
                                 "Daemon command failed: {err_msg}"
                             )));
                         }
-                    } else {
-                        let status = resp.status();
-                        let body = resp.text().await.unwrap_or_default();
-                        last_err = Some(format!("HTTP {status}: {body}"));
                     }
+
+                    // 4xx errors are client/business errors — don't retry
+                    if status.is_client_error() {
+                        let body = resp.text().await.unwrap_or_default();
+                        return Err(CliError::command_execution(format!(
+                            "Command error (HTTP {status}): {body}"
+                        )));
+                    }
+
+                    // 5xx / other errors — retryable
+                    let body = resp.text().await.unwrap_or_default();
+                    last_err = Some(format!("HTTP {status}: {body}"));
                 }
                 Err(e) => {
+                    // Network error — retryable
                     last_err = Some(format!("Request error: {e}"));
                 }
             }

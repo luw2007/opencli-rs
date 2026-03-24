@@ -5,6 +5,7 @@ mod execution;
 use clap::{Arg, ArgAction, Command};
 use clap_complete::Shell;
 use opencli_rs_core::Registry;
+use serde_json::Value;
 use opencli_rs_discovery::{discover_builtin_adapters, discover_user_adapters};
 use opencli_rs_external::{load_external_clis, ExternalCli};
 use opencli_rs_output::format::{OutputFormat, RenderOptions};
@@ -58,7 +59,13 @@ fn build_cli(registry: &Registry, external_clis: &[ExternalCli]) -> Command {
                     arg = arg.required(true);
                 }
                 if let Some(default) = &arg_def.default {
-                    arg = arg.default_value(default.to_string());
+                    // Value::String("x").to_string() produces "\"x\"" (JSON-encoded),
+                    // but clap needs the raw string value.
+                    let default_str = match default {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    arg = arg.default_value(default_str);
                 }
                 sub = sub.arg(arg);
             }
