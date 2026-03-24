@@ -33,12 +33,11 @@ pipeline:
         } catch {}
         return input;
       })()
-    store: videoId
-  - navigate: https://www.youtube.com/watch?v=${{ store.videoId }}
+  - navigate: https://www.youtube.com/watch?v=${{ data }}
   - wait: 3
   - evaluate: |
       (async () => {
-        const videoId = ${{ store.videoId | json }};
+        const videoId = ${{ data | json }};
         const lang = ${{ args.lang | default('') | json }};
         const mode = ${{ args.mode | default('grouped') | json }};
         const cfg = window.ytcfg?.data_ || {};

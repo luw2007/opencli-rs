@@ -28,14 +28,13 @@ pipeline:
         if (matched && matched[1]) return matched[1];
         return withoutQuery.replace(/\/+$/, '').split('/').pop() || withoutQuery;
       })()
-    store: userId
-  - navigate: https://www.xiaohongshu.com/user/profile/${{ store.userId }}
+  - navigate: https://www.xiaohongshu.com/user/profile/${{ data }}
   - scroll:
       times: 3
       delay: 1500
   - evaluate: |
       (() => {
-        const userId = ${{ store.userId | json }};
+        const userId = ${{ data | json }};
         const userStore = window.__INITIAL_STATE__?.user || {};
         const noteGroups = userStore.notes?._value || userStore.notes || [];
 

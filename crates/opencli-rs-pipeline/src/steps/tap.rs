@@ -9,26 +9,18 @@ use crate::step_registry::{StepHandler, StepRegistry};
 use crate::template::{render_template_str, TemplateContext};
 
 // ---------------------------------------------------------------------------
-// TapStep
+// TapStep — Store Action Bridge (Pinia/Vuex)
 // ---------------------------------------------------------------------------
 
 /// TapStep bridges store actions (Pinia/Vuex) with network interception.
 ///
-/// It installs a network interceptor, evaluates JS to invoke a store action,
-/// then collects the intercepted response and optionally selects a nested path.
+/// Generates a self-contained IIFE that:
+/// 1. Installs fetch + XHR dual interception proxy
+/// 2. Finds the Pinia/Vuex store and calls the action
+/// 3. Captures the response matching the URL pattern
+/// 4. Auto-cleans up interception in finally block
+/// 5. Returns the captured data (optionally sub-selected)
 pub struct TapStep;
-
-/// Walk a dotted path like `"data.items"` into a `Value`.
-fn select_path(value: &Value, path: &str) -> Value {
-    let mut current = value.clone();
-    for segment in path.split('.') {
-        if segment.is_empty() {
-            continue;
-        }
-        current = current.get(segment).cloned().unwrap_or(Value::Null);
-    }
-    current
-}
 
 #[async_trait]
 impl StepHandler for TapStep {
@@ -62,79 +54,194 @@ impl StepHandler for TapStep {
             index: 0,
         };
 
+        // Extract store name (required)
+        let store_name = obj
+            .get("store")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CliError::pipeline("tap: missing 'store' field"))?;
+        let store_name = render_template_str(store_name, &ctx)?
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
         // Extract action name (required)
-        let action_raw = obj
+        let action_name = obj
             .get("action")
             .and_then(|v| v.as_str())
             .ok_or_else(|| CliError::pipeline("tap: missing 'action' field"))?;
-        let action_rendered = render_template_str(action_raw, &ctx)?;
-        let action = action_rendered
+        let action_name = render_template_str(action_name, &ctx)?
             .as_str()
-            .ok_or_else(|| CliError::pipeline("tap: action must resolve to a string"))?
+            .unwrap_or("")
             .to_string();
 
-        // Extract args for the store action (optional)
-        let action_args = obj.get("args").cloned().unwrap_or(Value::Array(vec![]));
-        let action_args_json = serde_json::to_string(&action_args)
-            .map_err(|e| CliError::pipeline(format!("tap: failed to serialize args: {e}")))?;
-
-        // Extract URL pattern for interception (optional)
-        let url_pattern = obj
-            .get("url")
+        // Extract capture URL pattern (supports "capture" and "url" field names)
+        let capture_pattern = obj
+            .get("capture")
+            .or_else(|| obj.get("url"))
             .and_then(|v| v.as_str())
-            .unwrap_or("*");
+            .unwrap_or("");
+        let capture_pattern = render_template_str(capture_pattern, &ctx)?
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        // Extract timeout in seconds
+        let timeout_secs = obj
+            .get("timeout")
+            .or_else(|| obj.get("wait"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(5.0);
 
         // Extract select path (optional)
-        let select_path_str = obj.get("select").and_then(|v| v.as_str());
-
-        // Extract wait timeout
-        let wait_ms = obj.get("wait").and_then(|v| v.as_u64()).unwrap_or(5000);
-
-        // Step 1: Install network interceptor
-        pg.intercept_requests(url_pattern).await?;
-
-        // Step 2: Evaluate JS to invoke the store action
-        // This JS tries common store patterns: Pinia (__pinia), Vuex ($store), or window dispatch
-        let js = format!(
-            r#"(async () => {{
-                const args = {action_args_json};
-                // Try to find and invoke the store action
-                const parts = "{action}".split(".");
-                let target = window;
-                for (const part of parts) {{
-                    target = target && target[part];
-                }}
-                if (typeof target === 'function') {{
-                    return await target(...args);
-                }}
-                // Fallback: try evaluating as a direct expression
-                return await eval("{action}(" + args.map(a => JSON.stringify(a)).join(",") + ")");
-            }})()"#,
-        );
-        let eval_result = pg.evaluate(&js).await?;
-
-        // Step 3: Wait and collect intercepted responses
-        pg.wait_for_timeout(wait_ms).await?;
-        let requests = pg.get_intercepted_requests().await?;
-
-        // Determine result: prefer intercepted response body, fallback to eval result
-        let result = if !requests.is_empty() {
-            // Try to parse the first intercepted request's body as JSON
-            if let Some(body) = &requests[0].body {
-                serde_json::from_str(body).unwrap_or_else(|_| Value::String(body.clone()))
-            } else {
-                eval_result
-            }
-        } else {
-            eval_result
+        let select_path = obj.get("select").and_then(|v| v.as_str());
+        let select_chain = match select_path {
+            Some(path) => path
+                .split('.')
+                .map(|p| format!("?.[{}]", serde_json::to_string(p).unwrap_or_default()))
+                .collect::<String>(),
+            None => String::new(),
         };
 
-        // Step 4: Optionally select a nested path
-        if let Some(path) = select_path_str {
-            Ok(select_path(&result, path))
+        // Extract framework hint (optional)
+        let framework = obj
+            .get("framework")
+            .and_then(|v| v.as_str())
+            .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "null".to_string()))
+            .unwrap_or_else(|| "null".to_string());
+
+        // Extract action args (optional)
+        let action_args = obj.get("args").cloned().unwrap_or(Value::Array(vec![]));
+        let action_args_json = serde_json::to_string(&action_args).unwrap_or("[]".to_string());
+
+        let store_name_json = serde_json::to_string(&store_name).unwrap_or("\"\"".to_string());
+        let action_name_json = serde_json::to_string(&action_name).unwrap_or("\"\"".to_string());
+        let capture_json = serde_json::to_string(&capture_pattern).unwrap_or("\"\"".to_string());
+
+        // Build the action call
+        let action_call = if action_args == Value::Array(vec![]) {
+            format!("store[{action_name_json}]()")
         } else {
-            Ok(result)
+            let rendered_args: Vec<String> = action_args
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|a| serde_json::to_string(a).unwrap_or("null".to_string()))
+                .collect();
+            format!(
+                "store[{action_name_json}]({})",
+                rendered_args.join(", ")
+            )
+        };
+
+        // Generate self-contained JS that does everything in the browser
+        let js = format!(
+            r#"(async () => {{
+  // ── 1. Setup capture proxy (fetch + XHR dual interception) ──
+  let captured = null;
+  let captureResolve;
+  const capturePromise = new Promise(r => {{ captureResolve = r; }});
+  const capturePattern = {capture_json};
+
+  const origFetch = window.fetch;
+  window.fetch = async function(...fetchArgs) {{
+    const resp = await origFetch.apply(this, fetchArgs);
+    try {{
+      const url = typeof fetchArgs[0] === 'string' ? fetchArgs[0]
+        : fetchArgs[0] instanceof Request ? fetchArgs[0].url : String(fetchArgs[0]);
+      if (capturePattern && url.includes(capturePattern) && !captured) {{
+        try {{ captured = await resp.clone().json(); captureResolve(); }} catch {{}}
+      }}
+    }} catch {{}}
+    return resp;
+  }};
+
+  const origXhrOpen = XMLHttpRequest.prototype.open;
+  const origXhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function(method, url) {{
+    this.__tapUrl = String(url);
+    return origXhrOpen.apply(this, arguments);
+  }};
+  XMLHttpRequest.prototype.send = function(body) {{
+    if (capturePattern && this.__tapUrl?.includes(capturePattern)) {{
+      this.addEventListener('load', function() {{
+        if (!captured) {{
+          try {{ captured = JSON.parse(this.responseText); captureResolve(); }} catch {{}}
+        }}
+      }});
+    }}
+    return origXhrSend.apply(this, arguments);
+  }};
+
+  try {{
+    // ── 2. Find store ──
+    let store = null;
+    const storeName = {store_name_json};
+    const fw = {framework};
+
+    const app = document.querySelector('#app');
+    if (!fw || fw === 'pinia') {{
+      try {{
+        const pinia = app?.__vue_app__?.config?.globalProperties?.$pinia;
+        if (pinia?._s) store = pinia._s.get(storeName);
+      }} catch {{}}
+    }}
+    if (!store && (!fw || fw === 'vuex')) {{
+      try {{
+        const vuexStore = app?.__vue_app__?.config?.globalProperties?.$store
+          ?? app?.__vue__?.$store;
+        if (vuexStore) {{
+          store = {{ [{action_name_json}]: (...a) => vuexStore.dispatch(storeName + '/' + {action_name_json}, ...a) }};
+        }}
+      }} catch {{}}
+    }}
+
+    if (!store) return {{ error: 'Store not found: ' + storeName, hint: 'Page may not be fully loaded or store name may be incorrect' }};
+    if (typeof store[{action_name_json}] !== 'function') {{
+      return {{ error: 'Action not found: ' + {action_name_json} + ' on store ' + storeName,
+        hint: 'Available: ' + Object.keys(store).filter(k => typeof store[k] === 'function' && !k.startsWith('$') && !k.startsWith('_')).join(', ') }};
+    }}
+
+    // ── 3. Call store action ──
+    await {action_call};
+
+    // ── 4. Wait for network response ──
+    if (!captured) {{
+      const timeoutPromise = new Promise(r => setTimeout(r, {timeout_ms}));
+      await Promise.race([capturePromise, timeoutPromise]);
+    }}
+  }} finally {{
+    // ── 5. Always restore originals ──
+    window.fetch = origFetch;
+    XMLHttpRequest.prototype.open = origXhrOpen;
+    XMLHttpRequest.prototype.send = origXhrSend;
+  }}
+
+  if (!captured) return {{ error: 'No matching response captured for pattern: ' + capturePattern }};
+  return captured{select_chain} ?? captured;
+}})()"#,
+            timeout_ms = (timeout_secs * 1000.0) as u64,
+        );
+
+        let result = pg.evaluate(&js).await?;
+
+        // Check if the result is an error object from the JS
+        if let Some(error) = result.get("error").and_then(|v| v.as_str()) {
+            let hint = result
+                .get("hint")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            return Err(CliError::command_execution(format!(
+                "tap: {} {}",
+                error,
+                if hint.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", hint)
+                }
+            )));
         }
+
+        Ok(result)
     }
 }
 
@@ -167,18 +274,10 @@ mod tests {
         assert!(TapStep.is_browser_step());
     }
 
-    #[test]
-    fn test_select_path() {
-        let val = json!({"data": {"items": [1, 2, 3]}});
-        assert_eq!(select_path(&val, "data.items"), json!([1, 2, 3]));
-        assert_eq!(select_path(&val, "data"), json!({"items": [1, 2, 3]}));
-        assert_eq!(select_path(&val, "missing"), Value::Null);
-    }
-
     #[tokio::test]
     async fn test_tap_requires_page() {
         let step = TapStep;
-        let params = json!({"action": "store.fetchData"});
+        let params = json!({"store": "feed", "action": "fetchData"});
         let result = step
             .execute(None, &params, &json!(null), &HashMap::new())
             .await;

@@ -34,8 +34,7 @@ pipeline:
         if (location) params.set('location', location);
         return 'https://www.linkedin.com/jobs/search/?' + params.toString();
       })()
-    store: searchUrl
-  - navigate: ${{ store.searchUrl }}
+  - navigate: ${{ data }}
   - wait: 3
   - evaluate: |
       (async () => {

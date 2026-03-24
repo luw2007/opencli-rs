@@ -42,11 +42,10 @@ pipeline:
 
         return { productId, targetUrl };
       })()
-    store: params
-  - navigate: ${{ store.params.targetUrl }}
+  - navigate: ${{ data.targetUrl }}
   - evaluate: |
       (async () => {
-        const expectedProductId = ${{ store.params.productId | json }};
+        const expectedProductId = ${{ data.productId | json }};
         const text = document.body.innerText || '';
         const loginHints = {
           hasLoginLink: Boolean(document.querySelector('a[href*="login"], a[title*="로그인"]')),

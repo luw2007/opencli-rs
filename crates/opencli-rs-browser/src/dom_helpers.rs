@@ -109,9 +109,33 @@ pub fn network_requests_js() -> String {
         .to_string()
 }
 
+/// Convert a glob-like pattern to a regex pattern.
+/// Handles: * → .*, ** → .*, ? → .
+fn glob_to_regex(pattern: &str) -> String {
+    let mut result = String::new();
+    for ch in pattern.chars() {
+        match ch {
+            '*' => result.push_str(".*"),
+            '?' => result.push('.'),
+            '.' | '+' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' => {
+                result.push('\\');
+                result.push(ch);
+            }
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
 /// Generate JS to install a network request interceptor for a URL pattern.
 pub fn install_interceptor_js(pattern: &str) -> String {
-    let pat = pattern.replace('\\', "\\\\").replace('\'', "\\'");
+    // Convert glob pattern to regex if it contains glob chars
+    let regex_pat = if pattern.contains('*') || pattern.contains('?') {
+        glob_to_regex(pattern)
+    } else {
+        pattern.to_string()
+    };
+    let pat = regex_pat.replace('\\', "\\\\").replace('\'', "\\'");
     format!(
         r#"(() => {{
   if (!window.__opencli_intercepted) window.__opencli_intercepted = [];

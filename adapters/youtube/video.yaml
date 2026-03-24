@@ -28,8 +28,7 @@ pipeline:
         } catch {}
         return input;
       })()
-    store: videoId
-  - navigate: https://www.youtube.com/watch?v=${{ store.videoId }}
+  - navigate: https://www.youtube.com/watch?v=${{ data }}
   - wait: 3
   - evaluate: |
       (async () => {
