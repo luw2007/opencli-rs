@@ -24,9 +24,11 @@ fn main() {
 
     let mut code = String::from("pub const BUILTIN_ADAPTERS: &[(&str, &str)] = &[\n");
     for (rel_path, abs_path) in &entries {
+        // Normalize path separators to forward slash for cross-platform compatibility.
+        // Windows uses backslash which Rust interprets as escape sequences in string literals.
         code.push_str(&format!(
             "    (\"{}\", include_str!(\"{}\")),\n",
-            rel_path,
+            rel_path.replace('\\', "/"),
             abs_path.replace('\\', "/")
         ));
     }
