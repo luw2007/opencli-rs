@@ -91,7 +91,7 @@ jobs:
         run: |
           cd artifacts
           find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
-          sha256sum opencli-rs-* > SHA256SUMS.txt
+          sha256sum *.tar.gz *.zip > SHA256SUMS.txt 2>/dev/null || true
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
