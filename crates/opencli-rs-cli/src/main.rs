@@ -253,7 +253,9 @@ async fn main() {
                             goal,
                             site_name: site,
                         };
-                        match opencli_rs_ai::explore(page.as_ref(), url, options).await {
+                        let result = opencli_rs_ai::explore(page.as_ref(), url, options).await;
+                        let _ = page.close().await;
+                        match result {
                             Ok(manifest) => {
                                 let output = serde_json::to_string_pretty(&manifest).unwrap_or_default();
                                 println!("{}", output);
@@ -274,9 +276,11 @@ async fn main() {
                 );
                 match bridge.connect().await {
                     Ok(page) => {
-                        match opencli_rs_ai::cascade(page.as_ref(), url).await {
-                            Ok(result) => {
-                                let output = serde_json::to_string_pretty(&result).unwrap_or_default();
+                        let result = opencli_rs_ai::cascade(page.as_ref(), url).await;
+                        let _ = page.close().await;
+                        match result {
+                            Ok(r) => {
+                                let output = serde_json::to_string_pretty(&r).unwrap_or_default();
                                 println!("{}", output);
                             }
                             Err(e) => { print_error(&e); std::process::exit(1); }
@@ -297,7 +301,9 @@ async fn main() {
                 );
                 match bridge.connect().await {
                     Ok(page) => {
-                        match opencli_rs_ai::generate(page.as_ref(), url, goal.as_deref().unwrap_or("")).await {
+                        let gen_result = opencli_rs_ai::generate(page.as_ref(), url, goal.as_deref().unwrap_or("")).await;
+                        let _ = page.close().await;
+                        match gen_result {
                             Ok(candidate) => {
                                 // Save to ~/.opencli-rs/adapters/{site}/{name}.yaml
                                 let home = std::env::var("HOME")

@@ -1,6 +1,3 @@
-# NOTE: This adapter requires yt-dlp and Rust-side processing (checkYtdlp, downloadMedia,
-# getCookies, sanitizeFilename) that cannot be expressed purely in YAML pipeline evaluate steps.
-# It is included as a placeholder; full functionality requires native Rust adapter support.
 site: bilibili
 name: download
 description: 下载B站视频（需要 yt-dlp）
@@ -22,18 +19,32 @@ args:
 columns: [bvid, title, status, size]
 
 pipeline:
-  - navigate: https://www.bilibili.com/video/${{ args.bvid }}
-
-  - wait: 3
+  - navigate:
+      url: "https://www.bilibili.com/video/${{ args.bvid }}"
+      settleMs: 3000
 
   - evaluate: |
-      (() => {
+      (async () => {
+        const bvid = args.bvid;
         const title = document.querySelector('h1.video-title, .video-title')?.textContent?.trim() || 'video';
         const author = document.querySelector('.up-name, .username')?.textContent?.trim() || 'unknown';
-        return [{
-          bvid: '${{ args.bvid }}',
+
+        // Get cookies as Netscape format for yt-dlp
+        const cookies = document.cookie;
+
+        return {
+          bvid: bvid,
           title: title,
-          status: 'requires-native-download',
-          size: 'YAML pipeline cannot invoke yt-dlp; use native adapter'
-        }];
+          author: author,
+          cookies: cookies,
+          url: 'https://www.bilibili.com/video/' + bvid,
+        };
       })()
+
+  - download:
+      type: video
+      tool: yt-dlp
+      url: "${{ data.url }}"
+      title: "${{ data.title }}"
+      output: "${{ args.output }}"
+      quality: "${{ args.quality }}"

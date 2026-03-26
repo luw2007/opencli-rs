@@ -76,9 +76,9 @@ async fn execute_command_inner(
 
         // Execute
         let result = if let Some(ref steps) = cmd.pipeline {
-            execute_pipeline(Some(page), steps, &kwargs, &registry).await
+            execute_pipeline(Some(page.clone()), steps, &kwargs, &registry).await
         } else if cmd.func.is_some() {
-            run_command(cmd, Some(page), &kwargs, &registry).await
+            run_command(cmd, Some(page.clone()), &kwargs, &registry).await
         } else {
             Err(CliError::command_execution(format!(
                 "Command '{}' has no pipeline or func",
@@ -86,7 +86,9 @@ async fn execute_command_inner(
             )))
         };
 
-        // Don't close bridge — let daemon manage lifecycle
+        // Close the automation tab/window after command completes
+        let _ = page.close().await;
+
         result
     } else {
         run_command(cmd, None, &kwargs, &registry).await
