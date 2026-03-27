@@ -51,11 +51,14 @@ pub fn render(data: &Value, opts: &RenderOptions) -> String {
         output = format!("{}\n{}", title, output);
     }
 
-    if let Some(footer) = build_footer(opts) {
-        if !output.ends_with('\n') {
-            output.push('\n');
+    // Only show footer for human-readable formats (Table, Markdown)
+    if matches!(opts.format, OutputFormat::Table | OutputFormat::Markdown) {
+        if let Some(footer) = build_footer(opts) {
+            if !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&footer);
         }
-        output.push_str(&footer);
     }
 
     output
@@ -92,9 +95,10 @@ mod tests {
 
     #[test]
     fn test_render_with_footer() {
+        // Footer should only appear in Table/Markdown format, not in JSON
         let data = json!({"name": "Alice"});
         let opts = RenderOptions {
-            format: OutputFormat::Json,
+            format: OutputFormat::Table,
             elapsed: Some(Duration::from_millis(150)),
             source: Some("test-api".to_string()),
             footer_extra: Some("page 1/3".to_string()),
@@ -104,6 +108,22 @@ mod tests {
         assert!(out.contains("Elapsed: 150ms"));
         assert!(out.contains("Source: test-api"));
         assert!(out.contains("page 1/3"));
+    }
+
+    #[test]
+    fn test_render_json_no_footer() {
+        // JSON format should not have footer
+        let data = json!({"name": "Alice"});
+        let opts = RenderOptions {
+            format: OutputFormat::Json,
+            elapsed: Some(Duration::from_millis(150)),
+            source: Some("test-api".to_string()),
+            ..Default::default()
+        };
+        let out = render(&data, &opts);
+        assert!(!out.contains("Elapsed:"));
+        assert!(!out.contains("Source:"));
+        assert!(out.contains("Alice"));
     }
 
     #[test]
@@ -122,7 +142,7 @@ mod tests {
     fn test_render_elapsed_seconds() {
         let data = json!("ok");
         let opts = RenderOptions {
-            format: OutputFormat::Json,
+            format: OutputFormat::Table,
             elapsed: Some(Duration::from_secs_f64(2.5)),
             ..Default::default()
         };
