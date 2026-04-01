@@ -123,6 +123,11 @@ fn build_cli(registry: &Registry, external_clis: &[ExternalCli]) -> Command {
                 .arg(Arg::new("ai").long("ai").action(ArgAction::SetTrue).help("Use AI (LLM) to analyze and generate adapter (requires ~/.opencli-rs/config.json)")),
         )
         .subcommand(
+            Command::new("search")
+                .about("Search for existing adapters on autocli.ai")
+                .arg(Arg::new("url").required(true).help("URL to search adapters for")),
+        )
+        .subcommand(
             Command::new("auth")
                 .about("Authenticate with AutoCLI"),
         );
@@ -364,6 +369,84 @@ async fn main() {
                 completion::run_completion(&mut app, shell);
                 return;
             }
+            "search" => {
+                let raw_url = site_matches.get_one::<String>("url").unwrap();
+                let url = if raw_url.starts_with("http://") || raw_url.starts_with("https://") {
+                    raw_url.clone()
+                } else {
+                    format!("https://{}", raw_url)
+                };
+                let config = opencli_rs_ai::load_config();
+                let token = match &config.autocli_token {
+                    Some(t) => t.clone(),
+                    None => {
+                        eprintln!("{}", t("❌ 未认证，请先运行: opencli-rs auth", "❌ Not authenticated. Run first: opencli-rs auth"));
+                        std::process::exit(1);
+                    }
+                };
+
+                match search_existing_adapters(&url, &token).await {
+                    Ok(matches) if !matches.is_empty() => {
+                        let options: Vec<String> = matches.iter().map(|m| {
+                            let tag = match m.match_type.as_str() {
+                                "exact" => "[exact]  ",
+                                "partial" => "[partial]",
+                                "domain" => "[domain] ",
+                                _ => "[other]  ",
+                            };
+                            let desc = if m.description.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" - {}", m.description)
+                            };
+                            let author = if m.author.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" (by {})", m.author)
+                            };
+                            format!("{} {} {}{}{}", tag, m.site_name, m.cmd_name, author, desc)
+                        }).collect();
+
+                        let selection = inquire::Select::new(
+                            t("找到以下配置，请选择:", "Adapters found, please select:"),
+                            options,
+                        ).prompt();
+
+                        match selection {
+                            Ok(chosen) => {
+                                let idx = matches.iter().position(|m| {
+                                    chosen.contains(&m.cmd_name) && chosen.contains(&m.site_name)
+                                });
+                                if let Some(i) = idx {
+                                    let m = &matches[i];
+                                    let yaml_site = m.config.lines()
+                                        .find(|l| l.starts_with("site:"))
+                                        .and_then(|l| l.strip_prefix("site:"))
+                                        .map(|s| s.trim().trim_matches('"').to_string())
+                                        .unwrap_or_else(|| m.site_name.clone());
+                                    let yaml_name = m.config.lines()
+                                        .find(|l| l.starts_with("name:"))
+                                        .and_then(|l| l.strip_prefix("name:"))
+                                        .map(|s| s.trim().trim_matches('"').to_string())
+                                        .unwrap_or_else(|| m.cmd_name.clone());
+                                    save_adapter(&yaml_site, &yaml_name, &m.config);
+                                }
+                            }
+                            Err(_) => {
+                                eprintln!("{}", t("已取消", "Cancelled"));
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        eprintln!("{}", t("📭 未找到匹配的配置", "📭 No matching adapters found"));
+                    }
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
             "auth" => {
                 // Open browser to get token
                 let token_url = "https://autocli.ai/get-token";
@@ -577,7 +660,18 @@ async fn main() {
                                                 });
                                                 if let Some(i) = idx {
                                                     let m = &matches[i];
-                                                    save_adapter(&m.site_name, &m.cmd_name, &m.config);
+                                                    // Extract site and name from YAML config content, not server's display name
+                                                    let yaml_site = m.config.lines()
+                                                        .find(|l| l.starts_with("site:"))
+                                                        .and_then(|l| l.strip_prefix("site:"))
+                                                        .map(|s| s.trim().trim_matches('"').to_string())
+                                                        .unwrap_or_else(|| m.site_name.clone());
+                                                    let yaml_name = m.config.lines()
+                                                        .find(|l| l.starts_with("name:"))
+                                                        .and_then(|l| l.strip_prefix("name:"))
+                                                        .map(|s| s.trim().trim_matches('"').to_string())
+                                                        .unwrap_or_else(|| m.cmd_name.clone());
+                                                    save_adapter(&yaml_site, &yaml_name, &m.config);
                                                     let _ = page.close().await;
                                                     return;
                                                 } else {
