@@ -1,0 +1,58 @@
+site: trae-cn
+name: config
+description: 获取用户配置信息（智能体、MCP、模型、Beta等）
+domain: localhost
+strategy: ui
+browser: true
+
+args:
+  section:
+    positional: true
+    type: string
+    description: "配置部分：agent, mcp, model, context, rules, beta, all（默认）"
+    default: "all"
+
+columns: [Section, Status, Details]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const section = ${{ args.section | json }};
+        const results = [];
+        
+        // 查找配置菜单项
+        const menuItems = document.querySelectorAll('.menu-item2');
+        const menuTexts = {
+          '智能体': 'agent',
+          'MCP': 'mcp',
+          '模型': 'model',
+          '上下文': 'context',
+          '规则和技能': 'rules',
+          'Beta': 'beta'
+        };
+        
+        menuItems.forEach(item => {
+          const textEl = item.querySelector('.text');
+          if (textEl) {
+            const text = textEl.textContent.trim();
+            const key = menuTexts[text];
+            
+            if (key && (section === 'all' || section === key)) {
+              const icon = item.querySelector('.prefix');
+              const hasNewWindow = item.querySelector('.codicon-icube-NewWindow');
+              
+              results.push({
+                Section: text,
+                Status: 'Available',
+                Details: hasNewWindow ? 'Opens in new window' : 'Opens in panel'
+              });
+            }
+          }
+        });
+        
+        if (results.length === 0) {
+          results.push({ Section: 'None', Status: 'Not found', Details: 'No configuration items found' });
+        }
+        
+        return results;
+      })()

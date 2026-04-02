@@ -1,6 +1,6 @@
 use opencli_rs_core::{CliCommand, CliError, IPage};
 use opencli_rs_pipeline::{execute_pipeline, steps::register_all_steps, StepRegistry};
-use opencli_rs_browser::BrowserBridge;
+use opencli_rs_browser::{BrowserBridge, CdpPage};
 use serde_json::Value;
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -11,6 +11,11 @@ fn daemon_port() -> u16 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(19825)
+}
+
+/// Get CDP endpoint from env
+fn cdp_endpoint() -> Option<String> {
+    std::env::var("OPENCLI_CDP_ENDPOINT").ok()
 }
 
 /// Get command timeout from env or command config or default (60s)
@@ -55,12 +60,18 @@ async fn execute_command_inner(
     register_all_steps(&mut registry);
 
     if cmd.needs_browser() {
-        // Browser session
-        let mut bridge = BrowserBridge::new(daemon_port());
-        let page = bridge.connect().await?;
+        // Browser session - check if CDP endpoint is set
+        let page: Arc<dyn IPage> = if let Some(endpoint) = cdp_endpoint() {
+            tracing::info!(endpoint = %endpoint, "Connecting to CDP endpoint");
+            Arc::new(CdpPage::connect(&endpoint).await?)
+        } else {
+            let mut bridge = BrowserBridge::new(daemon_port());
+            bridge.connect().await?
+        };
 
         // Pre-navigate to domain if set, but ONLY if the pipeline doesn't
         // start with its own navigate step (to avoid double navigation).
+        // Skip navigation for localhost (Electron desktop apps)
         let pipeline_starts_with_navigate = cmd.pipeline.as_ref()
             .and_then(|steps| steps.first())
             .and_then(|step| step.as_object())
@@ -68,9 +79,13 @@ async fn execute_command_inner(
 
         if !pipeline_starts_with_navigate {
             if let Some(domain) = &cmd.domain {
-                let url = format!("https://{}", domain);
-                tracing::debug!(url = %url, "Pre-navigating to domain");
-                page.goto(&url, None).await?;
+                if domain != "localhost" {
+                    let url = format!("https://{}", domain);
+                    tracing::debug!(url = %url, "Pre-navigating to domain");
+                    page.goto(&url, None).await?;
+                } else {
+                    tracing::debug!("Skipping navigation for localhost (Electron app)");
+                }
             }
         }
 
@@ -86,8 +101,10 @@ async fn execute_command_inner(
             )))
         };
 
-        // Close the automation tab/window after command completes
-        let _ = page.close().await;
+        // Only close the page if NOT using CDP endpoint (Electron apps should stay open)
+        if cdp_endpoint().is_none() {
+            let _ = page.close().await;
+        }
 
         result
     } else {

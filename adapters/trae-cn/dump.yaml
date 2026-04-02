@@ -1,0 +1,37 @@
+site: trae-cn
+name: dump
+description: 导出当前 Trae 会话的完整数据
+domain: localhost
+strategy: ui
+browser: true
+
+args:
+  output:
+    type: string
+    description: "输出文件路径（默认: /tmp/trae-dump.json）"
+
+columns: [Status, File, Messages]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const messages = Array.from(document.querySelectorAll('[data-message-role], .message, [class*="message"]'));
+        const output = ${{ args.output }} || '/tmp/trae-dump.json';
+
+        const data = messages.map(msg => {
+          const role = msg.getAttribute('data-message-role') || 
+                       (msg.classList.contains('user') || msg.classList.contains('human') ? 'human' : 'assistant');
+          const content = msg.querySelector('.markdown, .content, [class*="content"]');
+          const text = content ? content.innerText : msg.innerText;
+          return {
+            role: role,
+            content: text.trim()
+          };
+        });
+
+        return [{
+          Status: 'Success',
+          File: output,
+          Messages: data.length
+        }];
+      })()

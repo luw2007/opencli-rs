@@ -1,0 +1,67 @@
+site: trae-cn
+name: rules-skills
+description: 获取当前的规则和技能配置
+domain: localhost
+strategy: ui
+browser: true
+
+columns: [Type, Name, Status]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const results = [];
+        
+        // 查找规则和技能菜单项
+        const menuItems = document.querySelectorAll('.menu-item2');
+        menuItems.forEach(item => {
+          const textEl = item.querySelector('.text');
+          if (textEl) {
+            const text = textEl.textContent.trim();
+            if (text === '规则和技能') {
+              results.push({
+                Type: 'Menu Item',
+                Name: text,
+                Status: 'Available'
+              });
+            }
+          }
+        });
+        
+        // 查找规则元数据容器
+        const ruleMetaContainer = document.querySelector('.icube-rule-meta-container');
+        if (ruleMetaContainer) {
+          const isVisible = ruleMetaContainer.style.display !== 'none';
+          results.push({
+            Type: 'Rule Meta Container',
+            Name: 'icube-rule-meta-container',
+            Status: isVisible ? 'Visible' : 'Hidden'
+          });
+        }
+        
+        // 查找技能相关的元素
+        const skillElements = document.querySelectorAll('[class*="skill"], [class*="rule"]');
+        if (skillElements.length > 0) {
+          results.push({
+            Type: 'Skill/Rule Elements',
+            Name: 'Found in DOM',
+            Status: `${skillElements.length} elements`
+          });
+        }
+        
+        // 查找当前激活的规则
+        const activeRules = document.querySelectorAll('[class*="active-rule"], [class*="rule-active"]');
+        if (activeRules.length > 0) {
+          results.push({
+            Type: 'Active Rules',
+            Name: 'Currently active',
+            Status: `${activeRules.length} rules`
+          });
+        }
+        
+        if (results.length === 0) {
+          results.push({ Type: 'Status', Name: 'No rules/skills found', Status: 'N/A' });
+        }
+        
+        return results;
+      })()

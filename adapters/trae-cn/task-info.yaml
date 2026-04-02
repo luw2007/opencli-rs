@@ -1,0 +1,73 @@
+site: trae-cn
+name: task-info
+description: 切换到指定任务并查看对话内容
+domain: localhost
+strategy: ui
+browser: true
+
+args:
+  index:
+    positional: true
+    type: int
+    default: 1
+    description: 任务索引（从 1 开始）
+
+columns: [Role, Content]
+
+pipeline:
+  - evaluate: |
+      (async () => {
+        const index = ${{ args.index }} || 1;
+        const taskList = document.querySelector('.index-module__task-items-list___VBFD2, [class*="task-items-list"]');
+        
+        if (!taskList) {
+          return [{ Role: 'Error', Content: '未找到任务列表' }];
+        }
+        
+        const tasks = taskList.querySelectorAll('.index-module__task-item___zOpfg, [class*="task-item"]');
+        
+        if (tasks.length === 0) {
+          return [{ Role: 'Error', Content: '暂无任务' }];
+        }
+        
+        if (index < 1 || index > tasks.length) {
+          return [{ Role: 'Error', Content: `任务索引超出范围 (1-${tasks.length})` }];
+        }
+        
+        const task = tasks[index - 1];
+        const isSelected = task.classList.contains('selected') || 
+                          task.classList.contains('index-module__selected___VDArP');
+        
+        if (!isSelected) {
+          task.click();
+          await new Promise(r => setTimeout(r, 800));
+        }
+        
+        const chatContainer = document.querySelector('.chat-content-container#mc-agent-content-container, #mc-agent-content-container, .chat-content-container');
+        
+        if (!chatContainer) {
+          return [{ Role: 'Error', Content: '未找到对话内容容器 (#mc-agent-content-container)' }];
+        }
+        
+        const results = [];
+        
+        const messages = chatContainer.querySelectorAll('[data-message-role], .message, [class*="message"], [class*="chat-message"]');
+        
+        if (messages.length === 0) {
+          const text = chatContainer.innerText || chatContainer.textContent;
+          results.push({ Role: 'Content', Content: text.trim() || '容器内容为空' });
+        } else {
+          messages.forEach((msg, i) => {
+            const role = msg.getAttribute('data-message-role') || 
+                        (msg.classList.contains('user') || msg.classList.contains('human') ? 'user' : 'assistant');
+            const content = msg.innerText || msg.textContent;
+            
+            results.push({
+              Role: role === 'user' || role === 'human' ? 'User' : 'Assistant',
+              Content: content.trim()
+            });
+          });
+        }
+        
+        return results.length > 0 ? results : [{ Role: 'Info', Content: '未找到对话内容' }];
+      })()

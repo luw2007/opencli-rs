@@ -1,0 +1,47 @@
+site: trae-cn
+name: user-info
+description: 获取当前登录用户信息
+domain: localhost
+strategy: ui
+browser: true
+
+columns: [Type, Value]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const results = [];
+        
+        // 查找用户头像区域
+        const avatarContainer = document.querySelector('[class*="user-avatar"], [class*="account-avatar"], .icube-user-avatar');
+        if (avatarContainer) {
+          results.push({ Type: 'Avatar Element', Value: avatarContainer.className });
+        }
+        
+        // 查找用户名
+        const userNameEl = document.querySelector('[class*="user-name"], [class*="username"], [class*="account-name"]');
+        if (userNameEl) {
+          results.push({ Type: 'Username', Value: userNameEl.textContent.trim() });
+        }
+        
+        // 查找用户邮箱
+        const userEmailEl = document.querySelector('[class*="user-email"], [class*="email"], [class*="account-email"]');
+        if (userEmailEl) {
+          results.push({ Type: 'Email', Value: userEmailEl.textContent.trim() });
+        }
+        
+        // 查找所有可能的用户信息元素
+        const userInfoElements = document.querySelectorAll('[class*="user-info"], [class*="account-info"]');
+        userInfoElements.forEach((el, idx) => {
+          results.push({ 
+            Type: `User Info Element ${idx + 1}`, 
+            Value: el.textContent.trim().substring(0, 100) 
+          });
+        });
+        
+        if (results.length === 0) {
+          results.push({ Type: 'Status', Value: 'No user information found' });
+        }
+        
+        return results;
+      })()

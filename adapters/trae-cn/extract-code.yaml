@@ -1,0 +1,39 @@
+site: trae-cn
+name: extract-code
+description: 从 Trae 回复中提取代码块
+domain: localhost
+strategy: ui
+browser: true
+
+args:
+  language:
+    type: string
+    description: "要提取的编程语言（例如：python, rust, javascript）"
+
+columns: [Index, Language, Code]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const desiredLang = ${{ args.language | json }};
+        const codeBlocks = Array.from(document.querySelectorAll('pre code, .code-block, [class*="highlight"]'));
+
+        if (codeBlocks.length === 0) {
+          return [{ Index: '-', Language: '-', Code: '未找到代码块' }];
+        }
+
+        return codeBlocks
+          .filter(block => {
+            if (!desiredLang) return true;
+            const lang = block.className.match(/language-(\w+)/);
+            return lang && lang[1].toLowerCase() === desiredLang.toLowerCase();
+          })
+          .map((block, i) => {
+            const lang = block.className.match(/language-(\w+)/);
+            return {
+              Index: i + 1,
+              Language: lang ? lang[1] : 'unknown',
+              Code: block.textContent.trim().substring(0, 500) + (block.textContent.length > 500 ? '...' : '')
+            };
+          });
+      })()

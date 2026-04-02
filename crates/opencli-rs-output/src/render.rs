@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use crate::csv_out::render_csv;
 use crate::format::{OutputFormat, RenderOptions};
+use crate::html::render_html;
 use crate::json::render_json;
 use crate::markdown::render_markdown;
 use crate::table::render_table;
@@ -45,13 +46,13 @@ pub fn render(data: &Value, opts: &RenderOptions) -> String {
         OutputFormat::Yaml => render_yaml(data, cols),
         OutputFormat::Csv => render_csv(data, cols),
         OutputFormat::Markdown => render_markdown(data, cols),
+        OutputFormat::Html => render_html(data, cols),
     };
 
     if let Some(title) = &opts.title {
         output = format!("{}\n{}", title, output);
     }
 
-    // Only show footer for human-readable formats (Table, Markdown)
     if matches!(opts.format, OutputFormat::Table | OutputFormat::Markdown) {
         if let Some(footer) = build_footer(opts) {
             if !output.ends_with('\n') {

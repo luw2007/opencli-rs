@@ -1,0 +1,45 @@
+site: trae-cn
+name: task-new
+description: 创建新任务
+domain: localhost
+strategy: ui
+browser: true
+
+args:
+  title:
+    positional: true
+    type: string
+    required: false
+    default: ""
+    description: 任务标题（可选）
+
+columns: [Status, Message]
+
+pipeline:
+  - evaluate: |
+      (async () => {
+        const title = ${{ args.title | json }} || "";
+        
+        const newTaskBtn = document.querySelector('.index-module__new-task-button___zhUKB, [class*="new-task-button"]');
+        
+        if (newTaskBtn) {
+          newTaskBtn.click();
+          await new Promise(r => setTimeout(r, 800));
+          
+          if (title) {
+            const input = document.querySelector('input[class*="task-title"], input[class*="task-name"], input[placeholder*="任务"], input[placeholder*="标题"], textarea[class*="task"]');
+            if (input) {
+              input.focus();
+              input.value = title;
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              await new Promise(r => setTimeout(r, 300));
+              input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+              await new Promise(r => setTimeout(r, 500));
+            }
+          }
+          
+          return [{ Status: 'Success', Message: title ? `已创建任务: ${title}` : '已点击新建任务按钮' }];
+        }
+        
+        return [{ Status: 'Error', Message: '未找到新建任务按钮' }];
+      })()

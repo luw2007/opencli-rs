@@ -1,0 +1,64 @@
+site: trae-cn
+name: context
+description: 获取当前上下文信息
+domain: localhost
+strategy: ui
+browser: true
+
+columns: [Type, Content, Count]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const results = [];
+        
+        // 查找上下文相关元素
+        const contextElements = document.querySelectorAll('[class*="context"]');
+        results.push({ 
+          Type: 'Context Elements', 
+          Content: 'Found in DOM', 
+          Count: contextElements.length 
+        });
+        
+        // 查找文件引用
+        const fileRefs = document.querySelectorAll('.file-reference-item, [class*="file-ref"]');
+        if (fileRefs.length > 0) {
+          const files = Array.from(fileRefs).map(el => {
+            const label = el.querySelector('.monaco-highlighted-label');
+            return label ? label.textContent.trim() : '';
+          }).filter(t => t);
+          
+          results.push({
+            Type: 'Referenced Files',
+            Content: files.slice(0, 5).join(', ') + (files.length > 5 ? '...' : ''),
+            Count: files.length
+          });
+        }
+        
+        // 查找代码引用
+        const codeRefs = document.querySelectorAll('.icube-chat-reference-preview-container.code-reference');
+        if (codeRefs.length > 0) {
+          results.push({
+            Type: 'Code References',
+            Content: 'Active code references',
+            Count: codeRefs.length
+          });
+        }
+        
+        // 查找当前工作区
+        const workspaceEl = document.querySelector('[class*="workspace"], .title');
+        if (workspaceEl) {
+          const title = document.title;
+          results.push({
+            Type: 'Current Workspace',
+            Content: title,
+            Count: 1
+          });
+        }
+        
+        if (results.length === 0) {
+          results.push({ Type: 'Status', Content: 'No context information found', Count: 0 });
+        }
+        
+        return results;
+      })()

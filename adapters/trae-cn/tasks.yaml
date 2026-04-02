@@ -1,0 +1,65 @@
+site: trae-cn
+name: tasks
+description: 查看任务列表
+domain: localhost
+strategy: ui
+browser: true
+
+columns: [Index, Status, Title, Time]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const taskList = document.querySelector('.index-module__task-items-list___VBFD2, [class*="task-items-list"]');
+        
+        if (!taskList) {
+          return [{ Index: '-', Status: '-', Title: '未找到任务列表', Time: '-' }];
+        }
+        
+        const tasks = taskList.querySelectorAll('.index-module__task-item___zOpfg, [class*="task-item"]');
+        
+        if (tasks.length === 0) {
+          return [{ Index: '-', Status: '-', Title: '暂无任务', Time: '-' }];
+        }
+        
+        const results = [];
+        tasks.forEach((task, i) => {
+          const fullText = task.textContent.trim();
+          
+          const isSelected = task.classList.contains('selected') || 
+                            task.classList.contains('index-module__selected___VDArP');
+          
+          let title = fullText;
+          let status = '待处理';
+          let time = '-';
+          
+          if (fullText.includes('进行中')) {
+            status = '进行中';
+            const parts = fullText.split('进行中');
+            title = parts[0].trim();
+            time = parts[1] ? parts[1].trim() : '-';
+          } else if (fullText.includes('已完成') || fullText.includes('完成')) {
+            status = '已完成';
+            const parts = fullText.split(/已完成|完成/);
+            title = parts[0].trim();
+            time = parts[1] ? parts[1].trim() : '-';
+          } else if (isSelected) {
+            status = '进行中';
+          }
+          
+          if (title.length > 50) {
+            title = title.substring(0, 50) + '...';
+          }
+          
+          if (title && title.length > 0 && time && time !== '-' && time.length > 0) {
+            results.push({
+              Index: results.length + 1,
+              Status: status,
+              Title: title,
+              Time: time
+            });
+          }
+        });
+        
+        return results.length > 0 ? results : [{ Index: '-', Status: '-', Title: '暂无有效任务', Time: '-' }];
+      })()

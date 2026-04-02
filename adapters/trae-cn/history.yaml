@@ -1,0 +1,35 @@
+site: trae-cn
+name: history
+description: 获取 Trae 会话历史列表
+domain: localhost
+strategy: ui
+browser: true
+
+args:
+  limit:
+    type: int
+    default: 20
+    description: 返回的历史记录数量
+
+columns: [Index, Title, Time]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const items = Array.from(document.querySelectorAll('.history-item, [class*="history"] li, .session-item'));
+        const limit = ${{ args.limit }} || 20;
+
+        if (items.length === 0) {
+          return [{ Index: '-', Title: '未找到历史记录', Time: '-' }];
+        }
+
+        return items.slice(0, limit).map((item, i) => {
+          const titleEl = item.querySelector('.title, [class*="title"], h3, h4');
+          const timeEl = item.querySelector('.time, [class*="time"], .date');
+          return {
+            Index: i + 1,
+            Title: titleEl ? titleEl.textContent.trim() : 'Untitled',
+            Time: timeEl ? timeEl.textContent.trim() : '-'
+          };
+        });
+      })()

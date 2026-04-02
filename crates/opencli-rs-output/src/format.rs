@@ -10,6 +10,7 @@ pub enum OutputFormat {
     Yaml,
     Csv,
     Markdown,
+    Html,
 }
 
 impl Default for OutputFormat {
@@ -26,6 +27,7 @@ impl fmt::Display for OutputFormat {
             Self::Yaml => write!(f, "yaml"),
             Self::Csv => write!(f, "csv"),
             Self::Markdown => write!(f, "markdown"),
+            Self::Html => write!(f, "html"),
         }
     }
 }
@@ -40,6 +42,7 @@ impl FromStr for OutputFormat {
             "yaml" => Ok(Self::Yaml),
             "csv" => Ok(Self::Csv),
             "md" | "markdown" => Ok(Self::Markdown),
+            "html" | "htm" => Ok(Self::Html),
             other => Err(format!("unknown output format: '{other}'")),
         }
     }

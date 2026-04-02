@@ -1,0 +1,31 @@
+site: trae-cn
+name: model
+description: 获取或切换 Trae 当前使用的 AI 模型
+domain: localhost
+strategy: ui
+browser: true
+
+args:
+  model-name:
+    positional: true
+    type: string
+    description: 要切换到的模型 ID（例如：claude-3.5-sonnet）
+
+columns: [Status, Model]
+
+pipeline:
+  - evaluate: |
+      (function() {
+        const desiredModel = ${{ args["model-name"] | json }};
+
+        if (!desiredModel) {
+          const m = document.querySelector('.model-selector span, [class*="model"] span, .dropdown-model span');
+          const currentModel = m ? m.textContent.trim() : 'Unknown or Not Found';
+          return [{ Status: 'Active', Model: currentModel }];
+        } else {
+          const dropdown = document.querySelector('.model-selector, [class*="model-dropdown"], .dropdown-model');
+          if (!dropdown) return [{ Status: 'Dropdown not found', Model: desiredModel }];
+          dropdown.click();
+          return [{ Status: 'Dropdown opened. Automated switching is not fully generic.', Model: desiredModel }];
+        }
+      })()
