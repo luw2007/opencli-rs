@@ -19,7 +19,6 @@
 **OpenClaw/Agent 的最佳搭档** —— 赋予你的 AI Agent 触达全网信息的能力，一行命令获取 55+ 站点的实时数据。
 **为 AI Agent 而生：** 在 `AGENT.md` 或 `.cursorrules` 中配置 `opencli-rs list`，AI 即可自动发现所有可用工具。注册你的本地 CLI（`opencli-rs register mycli`），AI 就能完美调用你的所有工具。
 
-**CLI 化一切桌面应用！** 将任何 Electron 应用变成命令行工具 —— Cursor、ChatGPT、Notion、Discord 等。重组、脚本化、扩展桌面应用，AI 可以原生控制自身，无限可能。
 
 ## 🚀 性能对比
 

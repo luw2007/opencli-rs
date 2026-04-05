@@ -19,7 +19,6 @@
 **OpenClaw/Agent の最良のパートナー** —— AI Agent にウェブ全体の情報にアクセスする能力を与え、1コマンドで55以上のサイトのリアルタイムデータを取得。
 **AI Agentのために設計：** `AGENT.md` や `.cursorrules` に `opencli-rs list` を設定すれば、AI が利用可能な全ツールを自動的に発見できます。ローカル CLI を登録（`opencli-rs register mycli`）すれば、AI があなたの全ツールを完璧に呼び出せます。
 
-**すべてのデスクトップアプリをCLI化！** あらゆる Electron アプリをコマンドラインツールに変換 —— Cursor、ChatGPT、Notion、Discord など。デスクトップアプリの再構成、スクリプト化、拡張が可能で、AI が自身をネイティブに制御でき、無限の可能性を秘めています。
 
 ## 🚀 パフォーマンス比較
 

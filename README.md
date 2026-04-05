@@ -18,7 +18,6 @@ A **complete rewrite in pure Rust** based on [OpenCLI](https://github.com/jackwe
 **The perfect companion for OpenClaw/Agent** — Give your AI Agent the ability to reach information across the entire web, fetching real-time data from 55+ sites with a single command.
 **Built for AI Agents:** Configure `opencli-rs list` in `AGENT.md` or `.cursorrules`, and AI can automatically discover all available tools. Register your local CLI (`opencli-rs register mycli`), and AI can seamlessly invoke all your tools.
 
-**CLI-fy All Desktop Apps!** Turn any Electron app into a command-line tool — Cursor, ChatGPT, Notion, Discord, and more. Reorganize, script, and extend desktop apps; AI can natively control itself — endless possibilities.
 
 ## 🚀 Performance Comparison
 
