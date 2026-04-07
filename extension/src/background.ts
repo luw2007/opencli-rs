@@ -756,8 +756,9 @@ chrome.action.onClicked.addListener(async (tab) => {
       // Already injected, re-run content.js to toggle
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['selector/content.js'] });
     } else {
-      // First time: inject engine + content
+      // First time: inject engine + dom-clean + content
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['selector/engine.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['selector/dom-clean.js'] });
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['selector/content.js'] });
     }
   } catch (e) {

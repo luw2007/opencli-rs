@@ -187,6 +187,35 @@
         font-family:'JetBrains Mono',monospace;
       }
 
+      /* Export */
+      .section { margin-top:12px; }
+      .sec-title { font-size:10px; font-weight:600; text-transform:uppercase; color:#888; margin-bottom:6px; letter-spacing:0.5px; }
+      .export-bar { display:flex; gap:5px; margin-bottom:6px; }
+      .export-area {
+        background:#0f1112; color:#e0e0e0; font:10px/1.4 'JetBrains Mono',monospace;
+        padding:8px; max-height:200px; overflow-y:auto;
+        white-space:pre-wrap; word-break:break-all;
+      }
+
+      /* Generate */
+      .btn-generate {
+        width:100%; padding:8px; margin-top:10px;
+        background:#ff571a; color:#fff; border:1px solid #ff571a;
+        font-size:12px; font-weight:600; cursor:pointer;
+        font-family:'Satoshi',sans-serif; letter-spacing:0.3px;
+      }
+      .btn-generate:hover { opacity:0.88; }
+      .btn-generate:disabled { opacity:0.4; cursor:not-allowed; }
+      .btn-generate.loading { background:#5d5f5f; border-color:#5d5f5f; }
+      .generate-result {
+        background:#0f1112; color:#e0e0e0; font:11px/1.5 'JetBrains Mono',monospace;
+        padding:10px; margin-top:8px; max-height:300px; overflow-y:auto;
+        white-space:pre-wrap; word-break:break-all;
+        border:1px solid #333;
+      }
+      .generate-result.streaming { border-color:#ff571a; }
+      .generate-error { color:#ff571a; font-size:11px; margin-top:6px; }
+
       /* Toast */
       .toast {
         position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
@@ -211,6 +240,19 @@
         <div id="s-entries">
           <div class="empty" id="s-empty">No entries yet</div>
         </div>
+        <div class="section" id="s-sec-export" style="display:none;">
+          <div class="sec-title">Export</div>
+          <div class="export-bar">
+            <button class="btn btn-sm" id="s-json">JSON</button>
+            <button class="btn btn-sm" id="s-yaml">YAML</button>
+          </div>
+          <div class="export-area" id="s-export"></div>
+        </div>
+        <div class="section" id="s-sec-generate" style="display:none;">
+          <button class="btn-generate" id="s-generate">Generate Adapter with AI</button>
+          <div class="generate-result" id="s-gen-result" style="display:none;"></div>
+          <div class="generate-error" id="s-gen-error" style="display:none;"></div>
+        </div>
         <div class="help"><b>ESC</b> stop picking · click selector to copy</div>
       </div>
       <div class="toast" id="s-toast">copied</div>
@@ -222,6 +264,13 @@
   const entriesEl = q('s-entries');
   const emptyEl = q('s-empty');
   const toastEl = q('s-toast');
+  const exportSection = q('s-sec-export');
+  const exportEl = q('s-export');
+  const genSection = q('s-sec-generate');
+  const genBtn = q('s-generate');
+  const genResult = q('s-gen-result');
+  const genError = q('s-gen-error');
+  console.log('[autocli-selector] genBtn:', genBtn, 'genResult:', genResult, 'genSection:', genSection);
 
   function setStatus(h, t) { statusEl.innerHTML = h; statusEl.className = 'status'+(t?' '+t:''); }
   function showToast(t) { toastEl.textContent=t||'copied'; toastEl.style.display='block'; setTimeout(()=>toastEl.style.display='none',1000); }
@@ -484,14 +533,24 @@
     });
   }
 
-  // ─── Export (hidden, stored in window) ─────────────────────────
+  // ─── Export ────────────────────────────────────────────────────
   function updateExport() {
     const saved = entries.filter(e=>e.selector);
-    if (!saved.length) { window.__autocliSelectorExport = null; return; }
-    window.__autocliSelectorExport = {
+    if (!saved.length) {
+      window.__autocliSelectorExport = null;
+      exportSection.style.display = 'none';
+      genSection.style.display = 'none';
+      return;
+    }
+    const data = {
       url: location.href,
+      title: document.title,
       entries: saved.map(e=>({ name:e.name, selector:e.selector, matchCount:e.matchCount, saved:e.saved, sample:e.sample||'' })),
     };
+    window.__autocliSelectorExport = data;
+    exportSection.style.display = 'block';
+    genSection.style.display = 'block';
+    exportEl.textContent = JSON.stringify(data, null, 2);
   }
 
   // ─── Panel buttons ────────────────────────────────────────────
@@ -501,12 +560,135 @@
     createEntry(name.trim());
   });
 
-  q('s-blocks').addEventListener('click', () => {
-    clearAllHighlights();
-    const colors = ['#ff571a','#4ecdc4','#45b7d1','#96ceb4','#ffd93d','#a29bfe'];
-    const blocks = SE.identifyPageBlocks();
-    blocks.forEach((b,i) => addHighlight(b.el, colors[i%colors.length], b.tag, 0));
-    setStatus(`<b>${blocks.length}</b> sections found`, 'success');
+  // Blocks button removed from UI
+
+  q('s-json').addEventListener('click', () => {
+    if (window.__autocliSelectorExport) {
+      copyText(JSON.stringify(window.__autocliSelectorExport, null, 2));
+    }
+  });
+
+  q('s-yaml').addEventListener('click', () => {
+    const d = window.__autocliSelectorExport;
+    if (!d) return;
+    let y = `# AutoCLI Selector\n# ${d.url}\ntitle: "${d.title || ''}"\n\nentries:\n`;
+    d.entries.forEach(e => {
+      y += `  ${e.name}:\n    selector: "${e.selector}"\n    match_count: ${e.matchCount}\n`;
+    });
+    copyText(y);
+  });
+
+  // ─── Generate with AI ──────────────────────────────────────────
+  genBtn.addEventListener('click', () => {
+    console.log('[autocli-selector] Generate button clicked');
+    const exportData = window.__autocliSelectorExport;
+    if (!exportData) { console.log('[autocli-selector] No export data'); return; }
+
+    // Disable button, show loading
+    genBtn.disabled = true;
+    genBtn.textContent = 'Cleaning DOM...';
+    genBtn.classList.add('loading');
+    genResult.style.display = 'block';
+    genResult.textContent = '';
+    genResult.classList.add('streaming');
+    genError.style.display = 'none';
+
+    (async () => {
+    try {
+      // Step 1: Clean DOM
+      console.log('[autocli-selector] Starting DOM clean...');
+      let domTree = '';
+      try {
+        const DC = window.__autocliDomClean;
+        if (DC) {
+          const jsCode = DC.fullCleanPipelineJs({ scrollPages: 2 });
+          domTree = await eval(jsCode);
+          console.log('[autocli-selector] DOM cleaned, length:', domTree.length);
+        } else {
+          console.log('[autocli-selector] DomClean not available, using fallback');
+          domTree = document.documentElement.outerHTML.substring(0, 30000);
+        }
+      } catch(cleanErr) {
+        console.error('[autocli-selector] DOM clean error:', cleanErr);
+        domTree = document.documentElement.outerHTML.substring(0, 30000);
+      }
+
+      genBtn.textContent = 'Generating...';
+
+      // Step 2: Build request body
+      const capturedData = {
+        url: exportData.url,
+        title: exportData.title || document.title,
+        entries: exportData.entries,
+        dom_tree: domTree,
+      };
+
+      // Step 3: Call daemon proxy (daemon adds token and forwards to autocli.ai)
+      const DAEMON_PORT = 19825;
+      const resp = await fetch(`http://localhost:${DAEMON_PORT}/ai-generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          captured_data: capturedData,
+          stream: true,
+        }),
+      });
+
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`${resp.status}: ${errText.substring(0, 200)}`);
+      }
+
+      // Step 4: Read SSE stream
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullContent = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') break;
+
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) {
+              fullContent += delta;
+              genResult.textContent = fullContent;
+              genResult.scrollTop = genResult.scrollHeight;
+            }
+          } catch(e) { /* skip unparseable chunks */ }
+        }
+      }
+
+      genResult.classList.remove('streaming');
+      if (!fullContent) {
+        genError.textContent = 'AI returned empty response';
+        genError.style.display = 'block';
+      }
+
+    } catch(e) {
+      console.error('[autocli-selector] Generate error:', e);
+      genResult.classList.remove('streaming');
+      genError.textContent = e.message;
+      genError.style.display = 'block';
+    } finally {
+      genBtn.disabled = false;
+      genBtn.textContent = 'Generate Adapter with AI';
+      genBtn.classList.remove('loading');
+    }
+    })();
   });
 
   q('s-close').addEventListener('click', () => {

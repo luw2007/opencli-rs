@@ -75,6 +75,7 @@ impl Daemon {
             .route("/ping", get(health_handler))
             .route("/status", get(status_handler))
             .route("/command", post(command_handler))
+            .route("/ai-generate", post(ai_generate_proxy_handler))
             .route("/ext", get(ws_handler))
             .layer(cors)
             .with_state(state.clone());
@@ -87,18 +88,8 @@ impl Daemon {
 
         info!(port, "daemon listening");
 
-        // Spawn idle-shutdown watchdog
-        let idle_state = state.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                let last = *idle_state.last_activity.read().await;
-                if last.elapsed() > IDLE_TIMEOUT {
-                    info!("daemon idle timeout reached, shutting down");
-                    break;
-                }
-            }
-        });
+        // Daemon runs permanently — no idle shutdown
+        let _idle_state = state.clone();
 
         // Spawn the server
         tokio::spawn(async move {
@@ -134,6 +125,244 @@ impl Daemon {
 /// GET /health — simple liveness check.
 async fn health_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
+}
+
+/// POST /ai-generate — proxy AI request to autocli.ai with local token.
+/// Reads token from ~/.autocli/config.json, streams response back to caller.
+async fn ai_generate_proxy_handler(
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    use axum::body::Body;
+    use axum::http::Response;
+
+    // Read token from local config
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    let config_path = std::path::PathBuf::from(&home).join(".autocli").join("config.json");
+    let token = match std::fs::read_to_string(&config_path) {
+        Ok(content) => {
+            serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .and_then(|v| v.get("autocli-token").and_then(|t| t.as_str()).map(String::from))
+                .unwrap_or_default()
+        }
+        Err(_) => String::new(),
+    };
+
+    if token.is_empty() {
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"error":"No token configured. Run: autocli auth"}"#))
+            .unwrap();
+    }
+
+    // Determine API base
+    let api_base = std::env::var("AUTOCLI_API_BASE")
+        .unwrap_or_else(|_| "https://www.autocli.ai".to_string());
+    let url = format!("{}/api/ai/extension-generate", api_base.trim_end_matches('/'));
+
+    // Forward request to remote API
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!(r#"{{"error":"{}"}}"#, e)))
+                .unwrap();
+        }
+    };
+
+    let resp = match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(body.to_vec())
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::from(format!(r#"{{"error":"{}"}}"#, e)))
+                .unwrap();
+        }
+    };
+
+    // Stream the response back while buffering for save+upload
+    let status = resp.status();
+    let content_type = resp.headers().get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+
+    if !status.is_success() {
+        let body_bytes = resp.bytes().await.unwrap_or_default();
+        return Response::builder()
+            .status(status.as_u16())
+            .header("Content-Type", &content_type)
+            .body(Body::from(body_bytes))
+            .unwrap();
+    }
+
+    // Fork the stream: send to client AND buffer for post-processing
+    let byte_stream = resp.bytes_stream();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(32);
+    let token_for_upload = token.clone();
+    let api_base_for_upload = api_base.clone();
+    let home_for_save = home.clone();
+
+    tokio::spawn(async move {
+        use futures::StreamExt;
+        let mut stream = byte_stream;
+        let mut all_bytes = Vec::new();
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    all_bytes.extend_from_slice(&bytes);
+                    let _ = tx.send(Ok(bytes)).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))).await;
+                    break;
+                }
+            }
+        }
+        drop(tx);
+
+        // Post-processing: extract YAML, save locally, upload to server
+        let full_text = String::from_utf8_lossy(&all_bytes).to_string();
+
+        // Extract content from SSE stream or JSON response
+        let yaml_content = extract_yaml_from_response(&full_text);
+        if yaml_content.is_empty() {
+            tracing::warn!("AI response contained no YAML content");
+            return;
+        }
+
+        // Save locally
+        if let Err(e) = save_adapter_locally(&home_for_save, &yaml_content) {
+            tracing::warn!(error = %e, "Failed to save adapter locally");
+        }
+
+        // Upload to server
+        if let Err(e) = upload_adapter_to_server(&api_base_for_upload, &token_for_upload, &yaml_content).await {
+            tracing::warn!(error = %e, "Failed to upload adapter to server");
+        }
+    });
+
+    let body_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .body(Body::from_stream(body_stream))
+        .unwrap()
+}
+
+/// Extract YAML content from SSE stream or JSON response
+fn extract_yaml_from_response(text: &str) -> String {
+    let mut content = String::new();
+
+    // Try SSE format: data: {"choices":[{"delta":{"content":"..."}}]}
+    for line in text.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if data.trim() == "[DONE]" { continue; }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(delta) = parsed.get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("delta"))
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                {
+                    content.push_str(delta);
+                }
+            }
+        }
+    }
+
+    // If no SSE content, try JSON response format
+    if content.is_empty() {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+            if let Some(msg) = parsed.get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("message"))
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+            {
+                content = msg.to_string();
+            }
+        }
+    }
+
+    // Clean: remove markdown fencing and thinking tags
+    let mut cleaned = content;
+    while let Some(start) = cleaned.find("<think>") {
+        if let Some(end) = cleaned.find("</think>") {
+            cleaned = format!("{}{}", &cleaned[..start], &cleaned[end + 8..]);
+        } else { cleaned = cleaned[..start].to_string(); break; }
+    }
+    while let Some(start) = cleaned.find("<thinking>") {
+        if let Some(end) = cleaned.find("</thinking>") {
+            cleaned = format!("{}{}", &cleaned[..start], &cleaned[end + 11..]);
+        } else { cleaned = cleaned[..start].to_string(); break; }
+    }
+    let trimmed = cleaned.trim();
+    let trimmed = trimmed.strip_prefix("```yaml").or_else(|| trimmed.strip_prefix("```")).unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix("```").unwrap_or(trimmed);
+    trimmed.trim().to_string()
+}
+
+/// Save adapter YAML to ~/.autocli/adapters/{site}/{name}.yaml
+fn save_adapter_locally(home: &str, yaml: &str) -> Result<(), String> {
+    let site = yaml.lines()
+        .find(|l| l.starts_with("site:"))
+        .and_then(|l| l.strip_prefix("site:"))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let name = yaml.lines()
+        .find(|l| l.starts_with("name:"))
+        .and_then(|l| l.strip_prefix("name:"))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .unwrap_or_else(|| "default".to_string());
+
+    let dir = std::path::PathBuf::from(home).join(".autocli").join("adapters").join(&site);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {}", e))?;
+    let path = dir.join(format!("{}.yaml", name));
+    std::fs::write(&path, yaml).map_err(|e| format!("write: {}", e))?;
+    tracing::info!(site = %site, name = %name, path = ?path, "Adapter saved locally");
+    Ok(())
+}
+
+/// Upload adapter YAML to server
+async fn upload_adapter_to_server(api_base: &str, token: &str, yaml: &str) -> Result<(), String> {
+    let url = format!("{}/api/sites/upload", api_base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("client: {}", e))?;
+
+    let body = serde_json::json!({ "config": yaml });
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("upload: {}", e))?;
+
+    if resp.status().is_success() {
+        tracing::info!("Adapter uploaded to server");
+        Ok(())
+    } else {
+        Err(format!("upload status: {}", resp.status()))
+    }
 }
 
 /// GET /status — return daemon and extension status.

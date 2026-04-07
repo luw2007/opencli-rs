@@ -256,6 +256,7 @@ struct AdapterMatch {
     description: String,
     author: String,
     command_uuid: String,
+    is_builtin: bool,
 }
 
 /// Search server for existing adapter configs matching the URL pattern.
@@ -304,9 +305,10 @@ async fn search_existing_adapters(url: &str, token: &str) -> Result<Vec<AdapterM
             .or_else(|| m.get("author").and_then(|v| v.as_str()))
             .unwrap_or("").to_string();
         let command_uuid = m.get("command").and_then(|c| c.get("uuid")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let is_builtin = m.get("command").and_then(|c| c.get("is_builtin")).and_then(|v| v.as_bool()).unwrap_or(false);
 
         if !command_uuid.is_empty() {
-            results.push(AdapterMatch { match_type, site_name, cmd_name, description, author, command_uuid });
+            results.push(AdapterMatch { match_type, site_name, cmd_name, description, author, command_uuid, is_builtin });
         }
     }
 
@@ -438,6 +440,42 @@ async fn main() {
         return;
     }
 
+    // 1.5. Ensure daemon is running in background
+    {
+        let port: u16 = std::env::var("AUTOCLI_DAEMON_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(19825);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(1))
+            .build()
+            .ok();
+        let daemon_running = if let Some(c) = &client {
+            c.get(&format!("http://127.0.0.1:{}/ping", port))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if !daemon_running {
+            // Spawn daemon as background process
+            if let Ok(exe) = std::env::current_exe() {
+                let child = tokio::process::Command::new(exe)
+                    .arg("--daemon")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                if let Ok(c) = child {
+                    std::mem::forget(c); // detach
+                    tracing::debug!(port, "Spawned daemon in background");
+                }
+            }
+        }
+    }
+
     // 2. Create registry and discover adapters
     let mut registry = Registry::new();
 
@@ -511,6 +549,7 @@ async fn main() {
                                 "domain" => "[domain] ",
                                 _ => "[other]  ",
                             };
+                            let builtin = if m.is_builtin { " [Built-in]" } else { "" };
                             let desc = if m.description.is_empty() {
                                 String::new()
                             } else {
@@ -521,7 +560,7 @@ async fn main() {
                             } else {
                                 format!(" (by {})", m.author)
                             };
-                            format!("{} {} {}{}{}", tag, m.site_name, m.cmd_name, author, desc)
+                            format!("{} {} {}{}{}{}", tag, m.site_name, m.cmd_name, builtin, author, desc)
                         }).collect();
 
                         let selection = inquire::Select::new(
@@ -536,22 +575,27 @@ async fn main() {
                                 });
                                 if let Some(i) = idx {
                                     let m = &matches[i];
-                                    eprintln!("{}", t("📥 正在下载配置...", "📥 Downloading config..."));
-                                    match fetch_adapter_config(&m.command_uuid, &token).await {
-                                        Ok(yaml) => {
-                                            let yaml_site = yaml.lines()
-                                                .find(|l| l.starts_with("site:"))
-                                                .and_then(|l| l.strip_prefix("site:"))
-                                                .map(|s| s.trim().trim_matches('"').to_string())
-                                                .unwrap_or_else(|| m.site_name.clone());
-                                            let yaml_name = yaml.lines()
-                                                .find(|l| l.starts_with("name:"))
-                                                .and_then(|l| l.strip_prefix("name:"))
-                                                .map(|s| s.trim().trim_matches('"').to_string())
-                                                .unwrap_or_else(|| m.cmd_name.clone());
-                                            save_adapter(&yaml_site, &yaml_name, &yaml);
+                                    if m.is_builtin {
+                                        eprintln!("{}", t("✅ 这是内建命令，可直接使用:", "✅ This is a built-in command, ready to use:"));
+                                        eprintln!("   autocli {} {}", m.site_name, m.cmd_name);
+                                    } else {
+                                        eprintln!("{}", t("📥 正在下载配置...", "📥 Downloading config..."));
+                                        match fetch_adapter_config(&m.command_uuid, &token).await {
+                                            Ok(yaml) => {
+                                                let yaml_site = yaml.lines()
+                                                    .find(|l| l.starts_with("site:"))
+                                                    .and_then(|l| l.strip_prefix("site:"))
+                                                    .map(|s| s.trim().trim_matches('"').to_string())
+                                                    .unwrap_or_else(|| m.site_name.clone());
+                                                let yaml_name = yaml.lines()
+                                                    .find(|l| l.starts_with("name:"))
+                                                    .and_then(|l| l.strip_prefix("name:"))
+                                                    .map(|s| s.trim().trim_matches('"').to_string())
+                                                    .unwrap_or_else(|| m.cmd_name.clone());
+                                                save_adapter(&yaml_site, &yaml_name, &yaml);
+                                            }
+                                            Err(e) => eprintln!("{}", e),
                                         }
-                                        Err(e) => eprintln!("{}", e),
                                     }
                                 }
                             }
@@ -745,6 +789,7 @@ async fn main() {
                                             "domain" => "[domain] ",
                                             _ => "[other]  ",
                                         };
+                                        let builtin = if m.is_builtin { " [Built-in]" } else { "" };
                                         let desc = if m.description.is_empty() {
                                             String::new()
                                         } else {
@@ -755,7 +800,7 @@ async fn main() {
                                         } else {
                                             format!(" (by {})", m.author)
                                         };
-                                        format!("{} {} {}{}{}", tag, m.site_name, m.cmd_name, author, desc)
+                                        format!("{} {} {}{}{}{}", tag, m.site_name, m.cmd_name, builtin, author, desc)
                                     }).collect();
                                     let regenerate_label = t("🔄 重新生成 (使用 AI 分析)", "🔄 Regenerate (using AI)").to_string();
                                     options.push(regenerate_label.clone());
@@ -776,7 +821,12 @@ async fn main() {
                                                 });
                                                 if let Some(i) = idx {
                                                     let m = &matches[i];
-                                                    // Extract site and name from YAML config content, not server's display name
+                                                    if m.is_builtin {
+                                                        eprintln!("{}", t("✅ 这是内建命令，可直接使用:", "✅ This is a built-in command, ready to use:"));
+                                                        eprintln!("   autocli {} {}", m.site_name, m.cmd_name);
+                                                        let _ = page.close().await;
+                                                        return;
+                                                    }
                                                     eprintln!("{}", t("📥 正在下载配置...", "📥 Downloading config..."));
                                                     match fetch_adapter_config(&m.command_uuid, &token).await {
                                                         Ok(yaml) => {
